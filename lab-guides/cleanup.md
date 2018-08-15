@@ -2,6 +2,8 @@
 
 ___
 
+## Clean Up
+
 Congratulations on successfully completing the workshop. Time to cean up or environment.
 
 1. Delete the CloudWatch Event and Target.
