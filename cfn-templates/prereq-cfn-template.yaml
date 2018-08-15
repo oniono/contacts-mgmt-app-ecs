@@ -1,0 +1,809 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Provision AWS resources required for ECS Bootcamp - Contacts Management Demo Application
+
+Parameters:
+  CognitoUserPoolName:
+    Description: Name of the Cognito User Pool
+    Type: String
+    Default: user-mgmt-app-cognito-pool
+  VpcId:
+    Description: VPC ID to deploy resources.
+    Type: String
+  PublicSubnet01:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public Subnet ID 01.
+  PublicSubnet02:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public Subnet ID 02.
+  PrivateSubnet01:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private Subnet ID 01.
+  PrivateSubnet02:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private Subnet ID 02.
+  ECSClusterName:
+    Type: String
+    Description: ECS Cluster to deploy the Containers.
+    Default: contacts-mgmt-app-cluster
+  ECSClusterSize:
+    Description: Number of Container Instances
+    Type: Number
+    Default: 2
+  InstanceType:
+    Description: Container Instance Type
+    Type: String
+    Default: m5.large
+  SshKeyName:
+    Description: SSH Key Name for Container Instance
+    Type: String
+
+Mappings:
+  AWSRegionToAMI:
+    us-east-2:
+      AMI: ami-956e52f0
+    us-east-1:
+      AMI: ami-5253c32d
+    us-west-2:
+      AMI: ami-d2f489aa
+    us-west-1:
+      AMI: ami-6b81980b
+    eu-west-3:
+      AMI: ami-ca75c4b7
+    eu-west-2:
+      AMI: ami-3622cf51
+    eu-west-1:
+      AMI: ami-c91624b0
+    eu-central-1:
+      AMI: ami-10e6c8fb
+    ap-northeast-2:
+      AMI: ami-7c69c112
+    ap-northeast-1:
+      AMI: ami-f3f8098c
+    ap-southeast-2:
+      AMI: ami-bc04d5de
+    ap-southeast-1:
+      AMI: ami-b75a6acb
+    ca-central-1:
+      AMI: ami-da6cecbe
+    ap-south-1:
+      AMI: ami-c7072aa8
+    sa-east-1:
+      AMI: ami-a1e2becd
+
+Resources:
+  AlbSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      VpcId: !Ref VpcId
+      GroupDescription: "Contacts-Mgmt-App ALB Security Group"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  ContainerInstanceSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      VpcId: !Ref VpcId
+      GroupDescription: "Container Instances Security Group"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 32768 # ephemeral port range 32768–61000 on the latest Amazon ECS-optimized AMI
+          ToPort: 61000
+          SourceSecurityGroupId:
+            Fn::GetAtt: [AlbSecurityGroup, GroupId]
+  
+  EcsCluster:
+    Type: "AWS::ECS::Cluster"
+    Properties:
+      ClusterName: !Ref ECSClusterName
+
+  ECSContainerInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      RoleName: !Sub ${ECSClusterName}-ECSRole-${AWS::Region}
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - 
+            Effect: "Allow"
+            Action: "sts:AssumeRole"
+            Principal:
+              Service: "ec2.amazonaws.com"
+      Policies:
+        - 
+          PolicyName: ecs-service
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - 
+                Effect: "Allow"
+                Action:
+                  - ecs:CreateCluster
+                  - ecs:DeregisterContainerInstance
+                  - ecs:DiscoverPollEndpoint
+                  - ecs:Poll
+                  - ecs:RegisterContainerInstance
+                  - ecs:StartTelemetrySession
+                  - ecs:Submit*
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:GetAuthorizationToken
+                  - ssm:DescribeAssociation
+                  - ssm:GetDeployablePatchSnapshotForInstance
+                  - ssm:GetDocument
+                  - ssm:GetManifest
+                  - ssm:GetParameters
+                  - ssm:ListAssociations
+                  - ssm:ListInstanceAssociations
+                  - ssm:PutInventory
+                  - ssm:PutComplianceItems
+                  - ssm:PutConfigurePackageResult
+                  - ssm:UpdateAssociationStatus
+                  - ssm:UpdateInstanceAssociationStatus
+                  - ssm:UpdateInstanceInformation
+                  - ec2messages:AcknowledgeMessage
+                  - ec2messages:DeleteMessage
+                  - ec2messages:FailMessage
+                  - ec2messages:GetEndpoint
+                  - ec2messages:GetMessages
+                  - ec2messages:SendReply
+                  - cloudwatch:PutMetricData
+                  - ec2:DescribeInstanceStatus
+                  - ds:CreateComputer
+                  - ds:DescribeDirectories
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - logs:PutLogEvents
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:AbortMultipartUpload
+                  - s3:ListMultipartUploadParts
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                Resource: "*"
+
+  ContainerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref ECSContainerInstanceRole
+  
+  ECSServiceAutoScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - 
+            Effect: Allow
+            Action: "sts:AssumeRole"
+            Principal:
+              Service: "application-autoscaling.amazonaws.com"
+      Policies:
+        - 
+          PolicyName: ecs-service-autoscaling
+          PolicyDocument:
+            Statement:
+              - 
+                Effect: Allow
+                Action:
+                  - application-autoscaling:*
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:PutMetricAlarm
+                  - ecs:DescribeServices
+                  - ecs:UpdateService
+                Resource: "*"
+
+  ContainerInstanceLaunchConfig:
+    DependsOn: EcsCluster
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId:  !FindInMap [AWSRegionToAMI, !Ref "AWS::Region", AMI]
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref SshKeyName
+      SecurityGroups:
+        - Fn::GetAtt: [ContainerInstanceSecurityGroup, GroupId]
+      AssociatePublicIpAddress: true
+      IamInstanceProfile: !Ref ContainerInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            yum update -y 
+            yum install -y aws-cfn-bootstrap
+            yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
+            /opt/aws/bin/cfn-init -v --region ${AWS::Region} --stack ${AWS::StackName} --resource ContainerInstanceLaunchConfig
+            /opt/aws/bin/cfn-signal -e $? --region ${AWS::Region} --stack ${AWS::StackName} --resource ContainerInstanceAutoScalingGroup
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          packages:
+            yum:
+              awslogs: []
+          commands:
+            01_add_instance_to_cluster:
+              command: !Sub echo ECS_CLUSTER=${ECSClusterName} >> /etc/ecs/ecs.config
+          files:
+            /etc/cfn/cfn-hup.conf:
+              content:
+                Fn::Sub: |
+                  [main]
+                  stack=${AWS::StackId}
+                  region=${AWS::Region}
+                  verbose=true
+                  interval=5
+              mode: "000400"
+              owner: root
+              group: root
+
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content:
+                Fn::Sub: |
+                  [cfn-auto-reloader-hook]
+                  triggers=post.update
+                  path=Resources.ContainerInstanceLaunchConfig.Metadata.AWS::CloudFormation::Init
+                  action=/opt/aws/bin/cfn-init -v --region ${AWS::Region} --stack ${AWS::StackName} --resource ContainerInstanceLaunchConfig
+              mode: "000400"
+              owner: root
+              group: root
+
+            /etc/awslogs/awscli.conf:
+              content: !Sub |
+                [plugins]
+                cwlogs = cwlogs
+                [default]
+                region = ${AWS::Region}
+
+            /etc/awslogs/awslogs.conf:
+              content: !Sub |
+                [general]
+                state_file = /var/lib/awslogs/agent-state
+
+                [/var/log/dmesg]
+                file = /var/log/dmesg
+                log_group_name = ${EcsCluster}-/var/log/dmesg
+                log_stream_name = ${EcsCluster}
+
+                [/var/log/messages]
+                file = /var/log/messages
+                log_group_name = ${EcsCluster}-/var/log/messages
+                log_stream_name = ${EcsCluster}
+                datetime_format = %b %d %H:%M:%S
+
+                [/var/log/docker]
+                file = /var/log/docker
+                log_group_name = ${EcsCluster}-/var/log/docker
+                log_stream_name = ${EcsCluster}
+                datetime_format = %Y-%m-%dT%H:%M:%S.%f
+
+                [/var/log/ecs/ecs-init.log]
+                file = /var/log/ecs/ecs-init.log.*
+                log_group_name = ${EcsCluster}-/var/log/ecs/ecs-init.log
+                log_stream_name = ${EcsCluster}
+                datetime_format = %Y-%m-%dT%H:%M:%SZ
+
+                [/var/log/ecs/ecs-agent.log]
+                file = /var/log/ecs/ecs-agent.log.*
+                log_group_name = ${EcsCluster}-/var/log/ecs/ecs-agent.log
+                log_stream_name = ${EcsCluster}
+                datetime_format = %Y-%m-%dT%H:%M:%SZ
+
+                [/var/log/ecs/audit.log]
+                file = /var/log/ecs/audit.log.*
+                log_group_name = ${EcsCluster}-/var/log/ecs/audit.log
+                log_stream_name = ${EcsCluster}
+                datetime_format = %Y-%m-%dT%H:%M:%SZ
+          services:
+            sysvinit:
+              cfn-hup:
+                enabled: "true"
+                ensureRunning: "true"
+                files:
+                  - "/etc/cfn/cfn-hup.conf"
+                  - "/etc/cfn/hooks.d/cfn-auto-reloader.conf"
+              awslogs:
+                enabled: true
+                ensureRunning: true
+                files:
+                  - /etc/awslogs/awslogs.conf
+                  - /etc/awslogs/awscli.conf
+
+  ContainerInstanceAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet01
+        - !Ref PrivateSubnet02
+      LaunchConfigurationName: !Ref ContainerInstanceLaunchConfig
+      MinSize: !Ref ECSClusterSize
+      MaxSize: !Ref ECSClusterSize
+      DesiredCapacity: !Ref ECSClusterSize
+      Tags:
+        - Key: Name
+          Value: !Sub ${ECSClusterName} - Container Instance
+          PropagateAtLaunch: true
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        MaxBatchSize: 1
+        PauseTime: PT15M
+        SuspendProcesses:
+          - HealthCheck
+          - ReplaceUnhealthy
+          - AZRebalance
+          - AlarmNotification
+          - ScheduledActions
+        WaitOnResourceSignals: true
+
+  SqsQueue:
+    Type: "AWS::SQS::Queue"
+  
+  S3EventQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: 
+        - Ref: SqsQueue
+      PolicyDocument:
+        Id: S3-EVENT-SQS-POLICY
+        Statement:
+          - 
+            Sid: MyQueuePolicy
+            Effect: Allow
+            Principal: 
+              AWS: "*"
+            Action: "sqs:*"
+            Resource: "*"
+            Condition: 
+              ArnLike:
+                aws:SourceArn: 
+                  Fn::Join: ["", ["arn:aws:s3:::", !Ref "AWS::StackName", "*"] ]
+
+  ImageS3Bucket:
+    Type: "AWS::S3::Bucket"
+    DependsOn:
+      - SqsQueue
+      - S3EventQueuePolicy
+    Properties:
+      CorsConfiguration:
+        CorsRules:
+          - 
+            AllowedHeaders: ["*"]
+            AllowedMethods: [POST, GET, PUT, DELETE, HEAD]
+            AllowedOrigins: ["*"]
+      NotificationConfiguration:
+        QueueConfigurations:
+          - 
+            Event: "s3:ObjectCreated:Put"
+            Queue: !GetAtt [SqsQueue, Arn]
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: "images/"  
+
+  ImageS3BucketPolicy:
+    Type: "AWS::S3::BucketPolicy"
+    Properties:
+      Bucket: !Ref ImageS3Bucket
+      PolicyDocument:
+        Statement:
+          - 
+            Action:
+              - "s3:GetObject"
+            Effect: "Allow"
+            Resource:
+              Fn::Join: ["", ["arn:aws:s3:::", !Ref ImageS3Bucket, "/*"]]
+            Principal: "*"
+
+  CognitoUserPool:
+    Type: "AWS::Cognito::UserPool"
+    Properties:
+      AdminCreateUserConfig:
+        InviteMessageTemplate:
+          EmailMessage: "Your username is {username} and temporary password is {####}. "
+          EmailSubject: "Your temporary password"
+          SMSMessage: "Your username is {username} and temporary password is {####}. "
+        AllowAdminCreateUserOnly: false
+        UnusedAccountValidityDays: 7
+      AutoVerifiedAttributes: [ email ]
+      EmailVerificationMessage: "Your verification code is {####}. "
+      EmailVerificationSubject: "Your verification code"
+      SmsVerificationMessage: "Your verification code is {####}. "
+      SmsAuthenticationMessage: "Your authentication code is {####}. "
+      MfaConfiguration: "OFF"
+      Policies: 
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+      UsernameAttributes: [email]
+      UserPoolName: !Ref CognitoUserPoolName
+
+  CognitoUserPoolClient:
+    Type: "AWS::Cognito::UserPoolClient"
+    Properties:
+      GenerateSecret: false
+      RefreshTokenValidity: 30
+      UserPoolId: !Ref CognitoUserPool
+
+  CognitoIdentityPool:
+    Type: "AWS::Cognito::IdentityPool"
+    Properties:
+      AllowUnauthenticatedIdentities: true
+      CognitoIdentityProviders:
+        - 
+          ServerSideTokenCheck: false
+          ProviderName: !GetAtt [CognitoUserPool, ProviderName]
+          ClientId: !Ref CognitoUserPoolClient
+
+  CognitoUnAuthorizedRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal: 
+              Federated: "cognito-identity.amazonaws.com"
+            Action: 
+              - "sts:AssumeRoleWithWebIdentity"
+            Condition:
+              StringEquals: 
+                "cognito-identity.amazonaws.com:aud": !Ref CognitoIdentityPool
+              "ForAnyValue:StringLike":
+                "cognito-identity.amazonaws.com:amr": unauthenticated
+      Policies:
+        - PolicyName: "CognitoUnauthorizedPolicy"
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - Effect: "Allow"
+                Action:
+                  - "dynamoDB:CreateTable"
+                  - "dynamodb:GetItem"
+                  - "dynamodb:BatchGetItem"
+                  - "dynamodb:Query"
+                  - "dynamodb:PutItem"
+                  - "dynamodb:UpdateItem"
+                  - "dynamodb:Scan"
+                Resource:
+                  - !GetAtt [SessionsDdbTable, Arn]
+              - Effect: "Allow"
+                Action:
+                  - "dynamodb:PutItem"
+                Resource:
+                  - !GetAtt [UserProfileDdbTable, Arn]
+              - Effect: "Allow"
+                Action:
+                  - "s3:PutObject"
+                  - "s3:PutObjectAcl"
+                  - "s3:GetObject"
+                  - "s3:GetObjectAcl"
+                Resource:
+                  - Fn::Join: ["",[!GetAtt [ImageS3Bucket, Arn], "/*"]]
+
+  CognitoAuthorizedRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal: 
+              Federated: "cognito-identity.amazonaws.com"
+            Action: 
+              - "sts:AssumeRoleWithWebIdentity"
+            Condition:
+              StringEquals: 
+                "cognito-identity.amazonaws.com:aud": !Ref CognitoIdentityPool
+              "ForAnyValue:StringLike":
+                "cognito-identity.amazonaws.com:amr": authenticated
+      Policies:
+        - PolicyName: "CognitoAuthorizedPolicy"
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - Effect: "Allow"
+                Action:
+                  - "dynamodb:GetItem"
+                  - "dynamodb:BatchGetItem"
+                  - "dynamodb:Query"
+                  - "dynamodb:PutItem"
+                  - "dynamodb:UpdateItem"
+                  - "dynamodb:Scan"
+                  - "dynamodb:BatchWriteItem"
+                Resource:
+                  - !GetAtt [SessionsDdbTable, Arn]
+                  - !GetAtt [ContactsDdbTable, Arn]
+              - Effect: "Allow"
+                Action:
+                  - "dynamodb:GetItem"
+                  - "dynamodb:BatchGetItem"
+                  - "dynamodb:Query"
+                  - "dynamodb:Scan"
+                Resource:
+                  - !GetAtt [UserProfileDdbTable, Arn]
+              - Effect: "Allow"
+                Action:
+                  - "s3:PutObject"
+                  - "s3:GetObject"
+                Resource:
+                  - Fn::Join: ["",[!GetAtt [ImageS3Bucket, Arn], "/*"]]
+
+  # Assigns the roles to the Identity Pool
+  IdentityPoolRoleMapping:
+    Type: "AWS::Cognito::IdentityPoolRoleAttachment"
+    Properties:
+      IdentityPoolId: !Ref CognitoIdentityPool
+      Roles:
+        authenticated: !GetAtt CognitoAuthorizedRole.Arn
+        unauthenticated: !GetAtt CognitoUnAuthorizedRole.Arn
+
+  ThumbnailServiceTaskRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - 
+            Effect: "Allow"
+            Action: "sts:AssumeRole"
+            Principal:
+              Service: "ecs-tasks.amazonaws.com"
+      Policies:
+        - 
+          PolicyName: ThumbnailServiceRolePolicy
+          PolicyDocument:
+            Statement:
+              - 
+                Effect: Allow
+                Action:
+                  - "sqs:ListQueues"
+                Resource: "*"
+              - 
+                Effect: Allow
+                Action:
+                  - "sqs:*"
+                Resource: !GetAtt [SqsQueue, Arn]
+              - 
+                Sid: S3AccessPolicy
+                Effect: "Allow"
+                Action:
+                  - "s3:GetObject"
+                  - "s3:GetObjectVersion"
+                  - "s3:GetBucketVersioning"
+                Resource: "*"
+              - 
+                Sid: S3WritePolicy
+                Effect: "Allow"
+                Action:
+                  - "s3:*"
+                Resource:
+                  Fn::Join: ["",[!GetAtt [ImageS3Bucket, Arn], "*"]]
+
+  UserProfileDdbTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      AttributeDefinitions:
+        - 
+          AttributeName: "Email"
+          AttributeType: S
+      KeySchema:
+        - 
+          AttributeName: Email
+          KeyType: HASH
+
+  ContactsDdbTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      AttributeDefinitions:
+        - 
+          AttributeName: "user_id"
+          AttributeType: S
+        - 
+          AttributeName: "unique_id"
+          AttributeType: S
+      KeySchema:
+        - 
+          AttributeName: "user_id"
+          KeyType: HASH
+        - 
+          AttributeName: "unique_id"
+          KeyType: RANGE
+  
+  SessionsDdbTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      TableName: "sessions"
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      AttributeDefinitions:
+        - 
+          AttributeName: "id"
+          AttributeType: S
+      KeySchema:
+        - 
+          AttributeName: "id"
+          KeyType: HASH
+  
+  FargateTaskExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - 
+            Effect: "Allow"
+            Action: "sts:AssumeRole"
+            Principal:
+              Service: "ecs-tasks.amazonaws.com"
+
+  FargateTaskExecutionRolePolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyName: "fargate-execution"
+      Roles: 
+        - Ref: "FargateTaskExecutionRole"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Action:
+              - "ecr:GetAuthorizationToken"
+              - "ecr:BatchGetImage"
+              - "ecr:GetDownloadUrlForLayer"
+              - "ecr:BatchCheckLayerAvailability"
+              - "logs:CreateLogStream"
+              - "logs:PutLogEvents"
+            Resource: "*"
+ 
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties: 
+      Scheme: internet-facing
+      SecurityGroups: [!Ref AlbSecurityGroup]
+      Subnets: [!Ref PublicSubnet01, !Ref PublicSubnet02]
+      Type: application
+  
+  UserInterfaceServiceALBTargetGroup:
+    Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+    Properties:
+      Protocol: "HTTP"
+      Port: 3000
+      TargetType: "ip"
+      VpcId: !Ref VpcId
+      HealthCheckProtocol: "HTTP"
+      HealthCheckPath: "/"
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      HealthCheckTimeoutSeconds: 5
+      HealthCheckIntervalSeconds: 30
+      Matcher:
+        HttpCode: '200'
+  
+  ContactsServiceALBTargetGroup:
+    Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+    Properties:
+      Protocol: "HTTP"
+      Port: 3000
+      TargetType: "instance"
+      VpcId: !Ref VpcId
+      HealthCheckProtocol: "HTTP"
+      HealthCheckPath: "/"
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      HealthCheckTimeoutSeconds: 5
+      HealthCheckIntervalSeconds: 30
+      Matcher:
+        HttpCode: '200'
+  
+  UserProfileServiceALBTargetGroup:
+    Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+    Properties:
+      Protocol: "HTTP"
+      Port: 3000
+      TargetType: "instance"
+      VpcId: !Ref VpcId
+      HealthCheckProtocol: "HTTP"
+      HealthCheckPath: "/"
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      HealthCheckTimeoutSeconds: 5
+      HealthCheckIntervalSeconds: 30
+      Matcher:
+        HttpCode: '200'
+
+  ALBListener:
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    Properties: 
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref UserInterfaceServiceALBTargetGroup
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: "HTTP" 
+
+  UserInterfaceServiceSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      VpcId: !Ref VpcId
+      GroupDescription: User Interface Service Security Group.
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId: 
+            Fn::GetAtt: [AlbSecurityGroup, GroupId]
+
+Outputs:
+  ImageS3BucketName:
+    Description: Image S3 Bucket Name
+    Value: !Ref ImageS3Bucket
+  SqsQueueUrl:
+    Description: SQS Queue URL
+    Value: !Ref SqsQueue
+  CognitoUserPoolId:
+    Description: Cognito User Pool ID.
+    Value: !Ref CognitoUserPool
+  CognitoUserPoolClientId:
+    Description: Cognito User Pool Client ID.
+    Value: !Ref CognitoUserPoolClient
+  CognitoIdentityPoolId:
+    Description: Cognito Identity Pool Client ID.
+    Value: !Ref CognitoIdentityPool
+  ThumbnailServiceTaskRoleArn:
+    Description: Thumbnail-Service Task IAM Role ARN.
+    Value: !GetAtt [ThumbnailServiceTaskRole, Arn]
+  UserProfileDdbTable:
+    Description: User-Profile DynamoDB Table name.
+    Value: !Ref UserProfileDdbTable
+  ContactsDdbTable:
+    Description: Contacts DynamoDB Table name.
+    Value: !Ref ContactsDdbTable
+  FargateTaskExecutionRoleArn:
+    Description: Fargate Task Execution Role ARN.
+    Value: !GetAtt [FargateTaskExecutionRole, Arn]
+  UserInterfaceServiceALBTargetGroupArn:
+    Description: User Interface Service ALB Target Group ARN.
+    Value: !Ref UserInterfaceServiceALBTargetGroup
+  ContactsServiceALBTargetGroupArn:
+    Description: Contacts Service ALB Target Group ARN.
+    Value: !Ref ContactsServiceALBTargetGroup
+  UserProfileServiceALBTargetGroupArn:
+    Description: User Profile Service ALB Target Group ARN.
+    Value: !Ref UserProfileServiceALBTargetGroup
+  ALBListenerArn:
+    Description: ALB Listener ARN.
+    Value: !Ref ALBListener
+  ALBDNSName:
+    Description: ALB DNS Name.
+    Value: !GetAtt ALB.DNSName
+  UserInterfaceServiceSecurityGroupId:
+    Description: User Interface Service Security Group Id.
+    Value: !Ref UserInterfaceServiceSecurityGroup

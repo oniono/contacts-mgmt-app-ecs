@@ -1,0 +1,21 @@
+{
+    "cluster": "contacts-mgmt-app-cluster",
+    "serviceName": "user-interface-service",
+    "taskDefinition": "contact-mgmt-app-user-interface-service",
+    "desiredCount": 2,
+    "launchType": "FARGATE",
+    "loadBalancers": [
+        {
+            "targetGroupArn": "<UserInterfaceServiceALBTargetGroupArn>",
+            "containerName": "user-interface-service-container",
+            "containerPort": 3000
+        }
+    ],
+    "networkConfiguration": {
+        "awsvpcConfiguration": {
+            "subnets": ["<PRIVATE-SUBNET-01-ID>", "<PRIVATE-SUBNET-02-ID>"],
+            "securityGroups": ["<UserInterfaceServiceSecurityGroupId>"],
+            "assignPublicIp": "ENABLED"
+        }
+    }
+}

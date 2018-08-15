@@ -1,0 +1,14 @@
+{
+    "cluster": "contacts-mgmt-app-cluster",
+    "serviceName": "user-profile-service",
+    "taskDefinition": "contact-mgmt-app-user-profile-service",
+    "desiredCount": 1,
+    "launchType": "EC2",
+    "loadBalancers": [
+        {
+            "targetGroupArn": "<UserProfileServiceALBTargetGroupArn>",
+            "containerName": "user-profile-service-container",
+            "containerPort": 3000
+        }
+    ]
+}

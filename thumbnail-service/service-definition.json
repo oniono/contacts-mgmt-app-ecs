@@ -1,0 +1,7 @@
+{
+    "cluster": "contacts-mgmt-app-cluster",
+    "serviceName": "thumbnail-service",
+    "taskDefinition": "contact-mgmt-app-thumbnail-service",
+    "desiredCount": 1,
+    "launchType": "EC2"
+}
